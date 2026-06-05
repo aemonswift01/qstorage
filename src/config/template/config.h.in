@@ -1,0 +1,11 @@
+#pragma once
+
+#cmakedefine VERSION "@VERSION@"
+#cmakedefine BUILD_TS "@BUILD_TS@"
+#cmakedefine GIT_HASH "@GIT_HASH@"
+#cmakedefine DEBUG
+// 如果 DEBUG 在 CMake 中为 真值 → 生成 #define DEBU
+
+// clang-format off
+#cmakedefine MAX_THREADS @MAX_THREADS@
+// clang-format on
