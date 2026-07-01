@@ -4,6 +4,7 @@
 #include <folly/coro/Mutex.h>
 #include <folly/coro/SharedMutex.h>
 #include <folly/coro/Task.h>
+#include <folly/io/async/IoUring.h>
 #include <folly/io/async/IoUringBackend.h>
 
 namespace qstorage::infra {
@@ -17,4 +18,8 @@ using SharedMutex = folly::coro::SharedMutex;
 using Baton = folly::coro::Baton;
 
 using IoUringBackend = folly::IoUringBackend;
+
+using IoUring = folly::IoUring;
+using IoUringOp = folly::IoUringOp;
+
 }  // namespace qstorage::infra

@@ -3,7 +3,9 @@
 #include <fcntl.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/Task.h>
+#include <folly/io/async/IoUring.h>
 #include <folly/io/async/IoUringBackend.h>
+#include <liburing.h>
 #include <string.h>  // strerror
 #include <sys/stat.h>
 #include <unistd.h>
@@ -13,6 +15,7 @@
 #include <cstdlib>
 #include "constant.h"
 #include "db/sp_ring_buffer.h"
+#include "infra/io_uring.h"
 #include "infra/port_posix.h"
 #include "infra/serialize.h"
 #include "infra/task.h"
@@ -35,7 +38,8 @@ struct WriteTask {
 
     bool Leader() noexcept { return is_leader_; }
 
-    infra::Task<void> LeaderComplete(uint32_t crc, uint16_t len) {
+    infra::Task<void> LeaderComplete(uint32_t crc, uint16_t len,
+                                     infra::CoIoUring& io_uring) {
         co_await writer_.notify_leader_;
         writer_.notify_leader_.reset();
         infra::SerializeLE(addr_, crc);
@@ -49,7 +53,14 @@ struct WriteTask {
             reinterpret_cast<uintptr_t>(addr_) & ~(kBlockSize - 1));
         auto len = writer.len + 6;
         memset(addr_ + writer.len, 0, 6);
-        size_t offset = (len + kBlockSize - 1) & ~(kBlockSize - 1);
+        size_t size = (len + kBlockSize - 1) & ~(kBlockSize - 1);
+        co_await commit(start, size, writer_.file_pos_, io_uring);
+        writer.completion_.post();
+        writer_.notify_leader_.post();
+        writer.Reset();
+        writer_.buffer_.CommitWrite(writer.len);
+        writer_.memory_notify_.post();
+        co_return;
     }
 
     infra::Task<void> FollowerComplete() {
@@ -57,15 +68,20 @@ struct WriteTask {
         co_await writer_.writers_[index_].completion_;
         co_return;
     }
+
+   private:
+    infra::Task<void> commit(uint8_t* addr, uint16_t len, size_t offset,
+                             infra::CoIoUring& io_uring) {
+        infra::Baton baton;
+        infra::IoRequest req(infra::OpCode::WRITE, writer_.fd_, addr, len,
+                             offset, baton);
+        io_uring.submit(&req);
+        co_return co_await baton;
+    }
 };
 
 class LogWriter {
    public:
-    enum class SlotState : uint64_t {
-        kReserved = 0,  // 刚圈完地，协程正在火速 memcpy 中
-        kReady = 1,     // 协程 memcpy 完毕，通知 Leader 可以打包发送了
-    };
-
     LogWriter(std::string log_file_path)
         : file_path_(std::move(log_file_path)) {}
 
@@ -124,14 +140,14 @@ class LogWriter {
         bool is_leader = false;
         size_t aw_index = active_writer_.load(std::memory_order_relaxed) & 1;
         co_await lock_.co_lock();
-
+    l1:
         WriteTask task(*this, writers_[aw_index].count_ == 0, aw_index);
         writers_[aw_index].count_++;
-    l1:
         uint8_t* res = buffer_.RequestWriteSpace(size);
         if (res == nullptr) [[unlikely]] {
             co_await memory_notify_;
             memory_notify_.reset();
+            aw_index = active_writer_.load(std::memory_order_relaxed) & 1;
             goto l1;
         }
         task.addr_ = res;
@@ -171,13 +187,6 @@ class LogWriter {
 
     infra::Baton memory_notify_;
     infra::Baton notify_leader_;
-
-    infra::IoUringBackend* backend_;
-
-    infra::Task<void> commit(uint8_t* src_ptr, size_t length) {
-        infra::Baton baton;
-        backend_->submit()
-    }
 };
 
 // 使用单向链表来做无锁操作
