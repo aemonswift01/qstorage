@@ -43,7 +43,7 @@ struct WriteTask {
         co_await writer_.notify_leader_;
         writer_.notify_leader_.reset();
         infra::SerializeLE(addr_, crc);
-        infra::SerializeLE(addr_ + 2, len);
+        infra::SerializeLE(addr_ + 4, len);
 
         auto& writer = writer_.writers_[index_];
         while (writer.completed_copy_.load() != writer.count_ - 1) {
