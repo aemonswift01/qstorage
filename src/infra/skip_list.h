@@ -106,8 +106,32 @@ struct Node {
         next_[n].StoreRelaxed(x);
     }
 
+    bool SetKeyValue(const KeyValue& key_value) {
+        auto res = count_.load(std::memory_order_acquire);
+        if (res >= N) {
+            return false;
+        }
+
+        while (true) {
+
+            if (count_.compare_exchange_weak(res, res | 1uul << 63,
+                                             std::memory_order_acq_rel)) {
+                break;
+            }
+                }
+
+        auto index = count_.fetch_add(1, std::memory_order_relaxed);
+        if (index >= N) {
+            return false;
+        }
+        data_[index] = key_value;
+        commit_.fetch_add(1, std::memory_order_release);
+    }
+
     // 最高位占位写，后面几位表示空余位置。
     std::atomic<uint64_t> count_{1};
+
+    std::atomic<uint64_t> commit_{1};
 
     KeyValue data_[N];
     // Array of length equal to the node height.  next_[0] is lowest level link.
